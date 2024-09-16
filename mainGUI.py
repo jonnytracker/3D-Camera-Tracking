@@ -20,6 +20,8 @@ class App:
         self.error_threshold = 1.0
         self.video_cap = None
         self.tracking = False
+        self.current_frame = 0
+        self.end_frame = None
 
         # Create a PanedWindow
         self.paned_window = tk.PanedWindow(root, orient=tk.HORIZONTAL)
@@ -39,6 +41,9 @@ class App:
         self.track_button = tk.Button(self.left_pane, text="Track Blips", command=self.start_tracking)
         self.track_button.pack(pady=10)
 
+        self.stop_button = tk.Button(self.left_pane, text="Stop", command=self.stop_tracking)
+        self.stop_button.pack(pady=10)
+
         self.refine_button = tk.Button(self.left_pane, text="Refine and Retrack", command=self.refine_and_retrack)
         self.refine_button.pack(pady=10)
 
@@ -47,7 +52,7 @@ class App:
 
         # Create sliders in the left pane
         self.size_slider = tk.Scale(self.left_pane, from_=50, to_=100, orient=tk.HORIZONTAL, label="Window Size (%)", command=self.update_window_size)
-        self.size_slider.set(100)  # Default to 100%
+        self.size_slider.set(50)  # Default to 50%
         self.size_slider.pack(pady=10)
 
         # Parameter sliders in the left pane
@@ -76,6 +81,13 @@ class App:
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_pane)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+        # Timeline bar at the bottom
+        self.timeline_frame = tk.Frame(root)
+        self.timeline_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        self.timeline = tk.Scale(self.timeline_frame, from_=0, to_=100, orient=tk.HORIZONTAL, label="Timeline", command=self.update_frame_from_timeline)
+        self.timeline.pack(fill=tk.X, padx=10, pady=5)
+
         self.update_window_size()  # Initial adjustment of window size
 
     def load_video(self):
@@ -83,6 +95,9 @@ class App:
         self.video_path = filedialog.askopenfilename(filetypes=filetypes)
         if self.video_path:
             self.video_cap = cv2.VideoCapture(self.video_path)
+            self.end_frame = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1
+            self.timeline.config(to=self.end_frame)  # Update timeline range
+            self.timeline.set(0)  # Set timeline to the first frame
             messagebox.showinfo("Info", "Video loaded successfully.")
         else:
             messagebox.showwarning("Warning", "No video selected.")
@@ -93,10 +108,15 @@ class App:
             return
 
         self.tracking = True
+        self.current_frame = 0
         self.show_frame()
+
+    def stop_tracking(self):
+        self.tracking = False
 
     def show_frame(self):
         if self.tracking and self.video_cap is not None:
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
             ret, frame = self.video_cap.read()
             if ret:
                 # Convert the frame to RGB (Tkinter uses RGB, while OpenCV uses BGR)
@@ -119,10 +139,20 @@ class App:
                 self.video_label.configure(image=imgtk)
 
                 # Update frame after 30ms
-                self.video_label.after(30, self.show_frame)
+                self.current_frame += 1
+                if self.current_frame <= self.end_frame:
+                    self.timeline.set(self.current_frame)
+                    self.video_label.after(30, self.show_frame)
+                else:
+                    self.stop_tracking()
             else:
                 # Stop tracking if video ends
-                self.tracking = False
+                self.stop_tracking()
+
+    def update_frame_from_timeline(self, value):
+        self.current_frame = int(value)
+        if not self.tracking:
+            self.show_frame()  # Show the selected frame if not currently tracking
 
     def detect_blips(self, image):
         max_blips = self.max_blips_slider.get()
@@ -196,6 +226,9 @@ class App:
         # Update the size of video label and canvas
         self.video_label.config(width=window_width // 2, height=window_height)
         self.canvas.get_tk_widget().config(width=window_width // 2, height=window_height)
+
+        # Update timeline bar size
+        self.timeline_frame.config(width=window_width)
 
 # Create the main window and application
 root = tk.Tk()
