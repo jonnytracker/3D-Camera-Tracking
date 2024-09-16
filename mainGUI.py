@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import tkinter as tk
-from tkinter import filedialog, simpledialog, messagebox
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -19,28 +19,64 @@ class App:
         self.max_blips = 100
         self.error_threshold = 1.0
         self.video_cap = None
+        self.tracking = False
 
-        # GUI Elements
-        self.load_button = tk.Button(root, text="Load Video", command=self.load_video)
+        # Create a PanedWindow
+        self.paned_window = tk.PanedWindow(root, orient=tk.HORIZONTAL)
+        self.paned_window.pack(fill=tk.BOTH, expand=True)
+
+        # Create the left and right panes
+        self.left_pane = tk.Frame(self.paned_window, width=300, relief=tk.SUNKEN)
+        self.right_pane = tk.Frame(self.paned_window, relief=tk.SUNKEN)
+
+        self.paned_window.add(self.left_pane)
+        self.paned_window.add(self.right_pane)
+
+        # Create GUI elements in the left pane
+        self.load_button = tk.Button(self.left_pane, text="Load Video", command=self.load_video)
         self.load_button.pack(pady=10)
 
-        self.track_button = tk.Button(root, text="Track Blips", command=self.track_blips)
+        self.track_button = tk.Button(self.left_pane, text="Track Blips", command=self.start_tracking)
         self.track_button.pack(pady=10)
 
-        self.refine_button = tk.Button(root, text="Refine and Retrack", command=self.refine_and_retrack)
+        self.refine_button = tk.Button(self.left_pane, text="Refine and Retrack", command=self.refine_and_retrack)
         self.refine_button.pack(pady=10)
 
-        self.export_button = tk.Button(root, text="Export 3D Data", command=self.export_data)
+        self.export_button = tk.Button(self.left_pane, text="Export 3D Data", command=self.export_data)
         self.export_button.pack(pady=10)
 
-        # Video display area
-        self.video_label = tk.Label(root)
-        self.video_label.pack(pady=10)
+        # Create sliders in the left pane
+        self.size_slider = tk.Scale(self.left_pane, from_=50, to_=100, orient=tk.HORIZONTAL, label="Window Size (%)", command=self.update_window_size)
+        self.size_slider.set(100)  # Default to 100%
+        self.size_slider.pack(pady=10)
 
-        # 3D Visualization window
+        # Parameter sliders in the left pane
+        self.max_blips_slider = tk.Scale(self.left_pane, from_=10, to_=500, orient=tk.HORIZONTAL, label="Max Blips")
+        self.max_blips_slider.set(self.max_blips)
+        self.max_blips_slider.pack(pady=5)
+
+        self.quality_level_slider = tk.Scale(self.left_pane, from_=1, to_=100, orient=tk.HORIZONTAL, label="Quality Level (%)")
+        self.quality_level_slider.set(1)  # Default to 1% (0.01)
+        self.quality_level_slider.pack(pady=5)
+
+        self.min_distance_slider = tk.Scale(self.left_pane, from_=1, to_=50, orient=tk.HORIZONTAL, label="Min Distance")
+        self.min_distance_slider.set(10)  # Default to 10
+        self.min_distance_slider.pack(pady=5)
+
+        self.block_size_slider = tk.Scale(self.left_pane, from_=3, to_=30, orient=tk.HORIZONTAL, label="Block Size")
+        self.block_size_slider.set(7)  # Default to 7
+        self.block_size_slider.pack(pady=5)
+
+        # Video display area in the right pane
+        self.video_label = tk.Label(self.right_pane)
+        self.video_label.pack(fill=tk.BOTH, expand=True)
+
+        # 3D Visualization window in the right pane
         self.fig, self.ax = self.create_3d_figure()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=root)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.right_pane)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self.update_window_size()  # Initial adjustment of window size
 
     def load_video(self):
         filetypes = [("Video Files", "*.mp4;*.avi")]
@@ -48,12 +84,19 @@ class App:
         if self.video_path:
             self.video_cap = cv2.VideoCapture(self.video_path)
             messagebox.showinfo("Info", "Video loaded successfully.")
-            self.show_frame()  # Start displaying video
         else:
             messagebox.showwarning("Warning", "No video selected.")
 
+    def start_tracking(self):
+        if not self.video_path:
+            messagebox.showwarning("Warning", "Please load a video first.")
+            return
+
+        self.tracking = True
+        self.show_frame()
+
     def show_frame(self):
-        if self.video_cap is not None:
+        if self.tracking and self.video_cap is not None:
             ret, frame = self.video_cap.read()
             if ret:
                 # Convert the frame to RGB (Tkinter uses RGB, while OpenCV uses BGR)
@@ -61,7 +104,7 @@ class App:
 
                 # Detect blips and draw them on the frame
                 gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                blips = self.detect_blips(gray_frame, max_blips=self.max_blips)
+                blips = self.detect_blips(gray_frame)
                 if blips is not None:
                     for blip in blips:
                         x, y = blip.ravel()
@@ -77,35 +120,31 @@ class App:
 
                 # Update frame after 30ms
                 self.video_label.after(30, self.show_frame)
+            else:
+                # Stop tracking if video ends
+                self.tracking = False
 
-    def detect_blips(self, image, max_blips=100):
+    def detect_blips(self, image):
+        max_blips = self.max_blips_slider.get()
+        quality_level = self.quality_level_slider.get() / 100.0  # Convert from slider percentage to decimal
+        min_distance = self.min_distance_slider.get()
+        block_size = self.block_size_slider.get()
+
         feature_params = dict(maxCorners=max_blips,
-                              qualityLevel=0.01,
-                              minDistance=10,
-                              blockSize=7)
+                              qualityLevel=quality_level,
+                              minDistance=min_distance,
+                              blockSize=block_size)
         blips = cv2.goodFeaturesToTrack(image, mask=None, **feature_params)
         return np.int32(blips) if blips is not None else None
-
-    def track_blips(self):
-        if not self.video_path:
-            messagebox.showwarning("Warning", "Please load a video first.")
-            return
-        # Start tracking the blips in video frames
-        messagebox.showinfo("Info", "Blips tracked.")
-        self.show_frame()
 
     def refine_and_retrack(self):
         if not self.video_path:
             messagebox.showwarning("Warning", "Please load a video first.")
             return
 
-        self.max_blips = simpledialog.askinteger("Input", "Max Blips:", initialvalue=self.max_blips)
-        if self.max_blips is None:
-            return
-
-        self.error_threshold = simpledialog.askfloat("Input", "Error Threshold:", initialvalue=self.error_threshold)
-        if self.error_threshold is None:
-            return
+        # Re-read parameters from sliders
+        self.max_blips = self.max_blips_slider.get()
+        self.error_threshold = self.error_threshold_slider.get() / 100.0  # Convert from slider percentage to decimal
 
         # Call your refinement function here
         # Example: refine_and_retrack_blips(self.video_path, self.max_blips, self.error_threshold)
@@ -144,6 +183,19 @@ class App:
         self.ax.set_ylabel('Y')
         self.ax.set_zlabel('Z')
         self.canvas.draw()
+
+    def update_window_size(self, event=None):
+        size_percentage = self.size_slider.get() / 100.0
+        window_width = int(self.root.winfo_screenwidth() * size_percentage)
+        window_height = int(self.root.winfo_screenheight() * size_percentage)
+
+        # Update the size of the left and right panes
+        self.left_pane.config(width=window_width // 2, height=window_height)
+        self.right_pane.config(width=window_width // 2, height=window_height)
+
+        # Update the size of video label and canvas
+        self.video_label.config(width=window_width // 2, height=window_height)
+        self.canvas.get_tk_widget().config(width=window_width // 2, height=window_height)
 
 # Create the main window and application
 root = tk.Tk()
